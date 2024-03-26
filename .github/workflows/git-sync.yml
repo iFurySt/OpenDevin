@@ -1,0 +1,25 @@
+name: Sync with Upstream
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'  # Run every 5 minutes
+
+jobs:
+  sync-main:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout git repo
+      uses: actions/checkout@v3
+      with:
+        ref: 'main' # specify the branch to checkout
+
+    - name: Pull upstream changes to main branch
+      uses: wei/git-sync@v3
+      with:
+        source_repo: 'git@github.com:OpenDevin/OpenDevin.git'
+        source_branch: 'main'
+        destination_repo: ${{ github.repository }}
+        destination_branch: 'main' # Change this to your main branch name
+        github_token: ${{ secrets.GITHUB_TOKEN }}
