@@ -117,7 +117,8 @@ class CodeActAgent(Agent):
             messages=self.messages, stop=['</execute>'], temperature=0.0
         )
         action_str: str = parse_response(response)
-        state.num_of_chars += sum(len(message['content']) for message in self.messages
+        state.num_of_chars += sum(
+            len(message['content']) for message in self.messages
         ) + len(action_str)
         self.messages.append({'role': 'assistant', 'content': action_str})
 
