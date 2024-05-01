@@ -104,8 +104,7 @@ class CodeActAgent(Agent):
                 if isinstance(
                     obs, AgentMessageObservation
                 ):  # warning message from itself
-                    self.messages.append(
-                        {'role': 'user', 'content': obs.content})
+                    self.messages.append({'role': 'user', 'content': obs.content})
                 elif isinstance(obs, CmdOutputObservation):
                     content = 'OBSERVATION:\n' + obs.content
                     content += f'\n[Command {obs.command_id} finished with exit code {obs.exit_code}]]'
@@ -115,13 +114,11 @@ class CodeActAgent(Agent):
                         f'Unknown observation type: {obs.__class__}'
                     )
         response = self.llm.completion(
-            messages=self.messages,
-            stop=['</execute>'],
-            temperature=0.0
+            messages=self.messages, stop=['</execute>'], temperature=0.0
         )
         action_str: str = parse_response(response)
-        state.num_of_chars += sum(len(message['content'])
-                                  for message in self.messages) + len(action_str)
+        state.num_of_chars += sum(len(message['content']) for message in self.messages
+        ) + len(action_str)
         self.messages.append({'role': 'assistant', 'content': action_str})
 
         command = re.search(r'<execute>(.*)</execute>', action_str, re.DOTALL)
