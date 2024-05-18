@@ -6,7 +6,16 @@ from pathlib import Path
 with warnings.catch_warnings():
     warnings.simplefilter('ignore')
     import litellm
-from fastapi import Depends, FastAPI, Response, UploadFile, WebSocket, status
+from fastapi import (
+    Depends,
+    FastAPI,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+    WebSocket,
+    status,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -19,8 +28,14 @@ from opendevin.core.logger import opendevin_logger as logger
 from opendevin.llm import bedrock
 from opendevin.runtime import files
 from opendevin.server.agent import agent_manager
-from opendevin.server.auth import get_sid_from_token, sign_token
-from opendevin.server.session import message_stack, session_manager
+from opendevin.server.auth import (
+    auth_github,
+    auth_google,
+    get_sid_from_token,
+    parse_token,
+    sign_token,
+)
+from opendevin.server.session import message_stack
 
 app = FastAPI()
 app.add_middleware(
@@ -98,14 +113,14 @@ async def websocket_endpoint(websocket: WebSocket):
         {"action": "finish", "args": {}}
         ```
     """
-    await websocket.accept()
-    sid = get_sid_from_token(websocket.query_params.get('token') or '')
-    if sid == '':
-        logger.error('Failed to decode token')
-        return
-    session_manager.add_session(sid, websocket)
-    agent_manager.register_agent(sid)
-    await session_manager.loop_recv(sid, agent_manager.dispatch)
+    # await websocket.accept()
+    # sid = get_sid_from_token(websocket.query_params.get('token') or '')
+    # if sid == '':
+    #     logger.error('Failed to decode token')
+    #     return
+    # session_manager.add_session(sid, websocket)
+    # agent_manager.register_agent(sid)
+    # await session_manager.loop_recv(sid, agent_manager.dispatch)
 
 
 @app.get('/api/litellm-models')
@@ -167,7 +182,60 @@ async def get_token(
         sid = str(uuid.uuid4())
         logger.info(f'No credentials provided, generating new session ID: {sid}')
 
-    token = sign_token({'sid': sid})
+    token = sign_token(
+        {
+            'uid': str(uuid.uuid4()),
+            'provider': '',
+            'username': 'Guest' + sid[-4:],
+            'email': '',
+            'avatar_url': '',
+        }
+    )
+    return {'token': token, 'status': 'ok'}
+
+
+@app.get('/api/auth/callback')
+async def oauth_callback(
+    provider: str,
+    code: str,
+    request: Request,
+):
+    try:
+        uid = str(uuid.uuid4())
+        auth_header = request.headers.get('Authorization')
+        if auth_header:
+            ss = auth_header.split(' ')
+            if len(ss) == 2 and ss[0] == 'Bearer':
+                token = ss[1]
+                old_payload = parse_token(token)
+                if 'uid' in old_payload:
+                    uid = old_payload['uid']
+
+        if provider == 'github':
+            res = auth_github(code)
+            payload = {
+                'uid': uid,
+                'provider': provider,
+                'username': res['name'],
+                'email': res['email'],
+                'avatar_url': res['avatar_url'],
+            }
+        elif provider == 'google':
+            res = auth_google(code)
+            payload = {
+                'uid': uid,
+                'provider': provider,
+                'username': res['name'],
+                'email': res['email'],
+                'avatar_url': res['picture'],
+            }
+        else:
+            raise HTTPException(status_code=400, detail='Invalid provider')
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # token will never expire for now.
+    token = sign_token(payload)
     return {'token': token, 'status': 'ok'}
 
 
@@ -266,30 +334,31 @@ def select_file(file: str):
     return {'code': content}
 
 
-@app.post('/api/upload-file')
-async def upload_file(file: UploadFile):
+@app.post('/api/upload-files')
+async def upload_files(files: list[UploadFile]):
     """
-    Upload a file.
+    Upload files to the workspace.
 
-    To upload a file:
+    To upload files:
     ```sh
-    curl -X POST -F "file=@<file_path>" http://localhost:3000/api/upload-file
+    curl -X POST -F "file=@<file_path1>" -F "file=@<file_path2>" http://localhost:3000/api/upload-files
     ```
     """
     try:
         workspace_base = config.workspace_base
-        file_path = Path(workspace_base, file.filename)
-        # The following will check if the file is within the workspace base and throw an exception if not
-        file_path.resolve().relative_to(Path(workspace_base).resolve())
-        with open(file_path, 'wb') as buffer:
-            shutil.copyfileobj(file.file, buffer)
+        for file in files:
+            file_path = Path(workspace_base, file.filename)
+            # The following will check if the file is within the workspace base and throw an exception if not
+            file_path.resolve().relative_to(Path(workspace_base).resolve())
+            with open(file_path, 'wb') as buffer:
+                shutil.copyfileobj(file.file, buffer)
     except Exception as e:
-        logger.error(f'Error saving file {file.filename}: {e}', exc_info=True)
+        logger.error(f'Error saving files: {e}', exc_info=True)
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={'error': f'Error saving file: {e}'},
+            content={'error': f'Error saving file:s {e}'},
         )
-    return {'filename': file.filename, 'location': str(file_path)}
+    return {'message': 'Files uploaded successfully', 'file_count': len(files)}
 
 
 @app.get('/api/root_task')
